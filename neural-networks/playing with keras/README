@@ -1,0 +1,5 @@
+Depedencies: python3, keras, tensorflow + gpu optomizations, matplotlib, numpy
+
+Run: gen_data.py -> add_noise.py -> neural_network.py
+
+send back Trained_Neuro_Net.h5
