@@ -71,9 +71,18 @@ class LeNet(pl.LightningModule):
             acc = self.accuracy(pred, y)
             acc_sum += acc
 
-        print(f"Accuracy: {acc_sum / (idx + 1)}")
         return acc_sum / (idx + 1)
-            # print(f"Accuracy: {acc}")
+
+    def test_accuracy_inv(self, loader : DataLoader):
+        self.eval()
+        acc_sum = 0
+        for idx, (x, y) in enumerate(loader):
+            x_hat = F.softmax(self.forward(x), dim=1)
+            pred = torch.argmin(x_hat, dim=1)           #argmin not argmax
+            acc = self.accuracy(pred, y)
+            acc_sum += acc
+
+        return acc_sum / (idx + 1)
 
      
     def configure_optimizers(self):
