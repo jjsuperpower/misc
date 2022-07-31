@@ -14,18 +14,18 @@ class LeNet(pl.LightningModule):
         
         self.feature_extractor = nn.Sequential(            
             nn.Conv2d(1, 8, 3, padding='same', stride=1),
-            nn.ReLU(),
+            nn.Tanh(),
             nn.AvgPool2d(kernel_size=2),
             nn.Conv2d(8, 16, 3, padding='same', stride=1),
-            nn.ReLU(),
+            nn.Tanh(),
             nn.AvgPool2d(kernel_size=2),
             nn.Conv2d(16, 32, 3, padding='same', stride=1),
-            nn.ReLU(),
+            nn.Tanh(),
         )
 
         self.classifier = nn.Sequential(
             nn.Linear(in_features=7*7*32, out_features=128),
-            nn.ReLU(),
+            nn.Tanh(),
             nn.Linear(in_features=128, out_features=n_classes),
         )
 
