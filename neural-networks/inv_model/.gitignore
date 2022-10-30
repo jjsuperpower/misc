@@ -1,0 +1,4 @@
+MNIST/
+__pycache__/
+*ckpt
+lightning_logs/
