@@ -86,7 +86,7 @@ def get_env():
     api_config = {}
     api_config['endpoint'] = 'https://api-ipv4.porkbun.com/api/json/v3'
 
-    config['domains_file'] = 'domains.txt'
+    config['domains_file'] = 'data/domains.txt'
     config['interval'] = 60    # in minutes
     config['log_level'] = 'INFO'
 
@@ -108,7 +108,7 @@ def get_env():
         config['domains_file'] = os.environ['domains_file']
 
     if os.environ.get('interval') is not None:
-        config['interval'] = os.environ['interval']
+        config['interval'] = int(os.environ['interval'])
 
     if os.environ.get('log_level') is not None:
         config['log_level'] = os.environ['log_level']
@@ -154,8 +154,8 @@ def parse_domains_file(file):
 def main():
 
     config, api_config = get_env()
-    logger = logging.getLogger('PK_DDNS')
-    pk_ddns = PorkBun_DDNS(api_config, logger)
+    logger = logging.getLogger('PB_DDNS')
+    pb_ddns = PorkBun_DDNS(api_config, logger)
     logging.basicConfig(level=config['log_level'], format='%(asctime)s %(levelname)s %(message)s')
     logging.info('Booting up')
 
@@ -175,8 +175,8 @@ def main():
                 logging.warning('No domains to update')
             else:
                 for domain in domains:
-                    pk_ddns.deleteRecord(domain['root_domain'], domain['subdomain'])
-                    pk_ddns.createRecord(domain['root_domain'], domain['subdomain'], domain['ip'])
+                    pb_ddns.deleteRecord(domain['root_domain'], domain['subdomain'])
+                    pb_ddns.createRecord(domain['root_domain'], domain['subdomain'], domain['ip'])
 
             
         if config['interval'] == 0:
@@ -190,6 +190,5 @@ def main():
     
 
 if __name__ == "__main__":
-    
     main()
     logging.info('Shutting down')
