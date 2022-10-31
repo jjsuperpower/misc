@@ -1,0 +1,47 @@
+# PorkBun DDNS Updater
+
+This is a simple docker image that updates PorkBun DNS(s) with your current IP address. Optionaly you can set static IP addresses for your DNS records.
+
+The code is located on [GitHub](https://github.com/jjsuperpower/misc/tree/master/porbun-dns). Issues can be reported there. Please feel free to contribute.
+
+## Getting Started
+To create a container, run the following command:
+
+    docker run \
+    -dt \
+    --name pb_ddns \
+    -v pb_ddns_data:/data \
+    -e apikey=<your_apikey> \
+    -e secretapikey=<your_secretapikey> \
+    jjsuperpower/porkbun_ddns
+
+This will create a container named `pb_ddns` and store the configuration in a volume named `pb_ddns_data`. You will then need to edit the file `/data/domains.txt` to add your domains and subdomains. To edit the `domains.txt` file run the following two commands to edit the file and restart the container:
+
+    docker exec -it pb_ddns nano /data/domains.txt
+    docker restart pb_ddns
+
+## Misc
+
+### Environment Variables
+
+| Variable | Description | Default |
+| -------- | ----------- | ------- |
+| `apikey` | Your PorkBun API key | `None` |
+| `secretapikey` | Your PorkBun Secret API key | `None` |
+| `domains_file` | Path to domains file | `/data/domains.json` |
+| `interval` | Interval in minutes to update DNS records | `60` |
+| `log_level` | Logging level | `INFO` |
+
+### Domains.txt example
+
+    # --------------------------------------
+    #             domains.txt
+    #---------------------------------------
+
+    i.com               # update root domain
+    myself.i.com        # update subdomain
+    me.myself.i.com
+    static.i.com        123.45.56.789   # set static IP address
+
+
+

@@ -61,13 +61,18 @@ class PorkBun_DDNS():
         if ip is None:
             ip = self.getMyIP()
 
-        self.logger.info(f'Updating {sub_domain} with {ip}')
+        if sub_domain == '':
+            domain = root_domain
+        else:
+            domain = sub_domain + '.' + root_domain
+
+        self.logger.info(f'Updating {domain} with {ip}')
 
         createObj=self.api_config.copy()
         createObj.update({'name': sub_domain, 'type': 'A', 'content': ip, 'ttl': 300})
         self.logger.debug(f'Created object: {createObj}')
 
-        self.logger.debug("Created record: " + sub_domain + '.' + root_domain + " with answer of " + ip)
+        self.logger.debug("Created record: " + domain + " with answer of " + ip)
         create = json.loads(requests.post(self.api_config["endpoint"] + '/dns/create/'+ root_domain, data = json.dumps(createObj)).text)
         self.logger.debug(f'Created record: {create}')
 
