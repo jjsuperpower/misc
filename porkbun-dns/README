@@ -2,7 +2,7 @@
 
 This is a simple docker image that updates PorkBun DNS(s) with your current IP address. Optionaly you can set static IP addresses for your DNS records.
 
-The code is located on [GitHub](https://github.com/jjsuperpower/misc/tree/master/porbun-dns). Issues can be reported there. Please feel free to contribute.
+The code is located on [GitHub](https://github.com/jjsuperpower/misc/tree/master/porkbun-dns). Issues can be reported there. Please feel free to contribute.
 
 ## Getting Started
 To create a container, run the following command:
@@ -31,6 +31,31 @@ This will create a container named `pb_ddns` and store the configuration in a vo
 | `domains_file` | Path to domains file | `/data/domains.json` |
 | `interval` | Interval in minutes to update DNS records | `60` |
 | `log_level` | Logging level | `INFO` |
+
+### Docker Compose
+
+```
+version: '3'
+
+services:
+
+    app:
+        image: jjsuperpower/porkbun-ddns
+        restart: unless-stopped
+
+        environment:
+        - apikey=your_apikey
+        - secretapikey=your_secretapikey
+        - domains_file=/data/domains.json
+        - interval=60
+        - log_level=INFO
+        
+        volumes:
+        - data:/data
+
+volumes:
+    data:
+```
 
 ### Domains.txt example
 
