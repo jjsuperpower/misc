@@ -41,6 +41,7 @@ services:
 
     app:
         image: jjsuperpower/porkbun-ddns
+        container_name: "porkbun-ddns"
         restart: unless-stopped
 
         environment:
