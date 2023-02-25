@@ -46,3 +46,5 @@ class logging:
     def critical(cls, *args, **kwargs):
         if cls.log_level <= cls.CRITICAL:
             cls._print('CRITICAL', *args, **kwargs)
+
+
