@@ -17,7 +17,7 @@ Cargo.lock
 mnt_dir/
 src_dir/
 
-
+.vscode/
 *.tar
 *.tar.gz
 *.tar.xz

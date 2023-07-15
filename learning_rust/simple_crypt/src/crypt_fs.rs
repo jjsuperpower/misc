@@ -1,5 +1,8 @@
 use std::ffi::OsStr;
+use std::io::{self, prelude::*};
+use std::mem::forget;
 use std::os::fd::{IntoRawFd, FromRawFd, RawFd};
+use std::os::unix::prelude::FileExt;
 use std::{fs, os::linux::fs::MetadataExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -72,7 +75,24 @@ impl CryptFS {
         return real_path;
     }
 
-    
+    // // This function assumes the path exists
+    // fn check_permissions(&self, _req: RequestInfo, _path: &Path, _mask:u16) -> Result<(), libc::c_int> {
+
+    //     let metadata = match fs::metadata(_path) {
+    //         Ok(metadata) => metadata,
+    //         Err(_) => return Err(libc::ENOENT),
+    //     };
+
+    //     let file_mode = metadata.st_mode() as u16;
+    //     let file_uid = metadata.st_uid();
+    //     let file_gid = metadata.st_gid();
+
+    // }
+
+    // fn check_ro_permissions(&self, _req: RequestInfo, _path: &Path, _fh: Option<u64>) -> Result<(), libc::c_int> {
+    //     // check if file is read only
+    //     return self.check_permissions(_req, _path, _fh, false);
+    // }
 
 }
 
@@ -131,6 +151,12 @@ impl FilesystemMT for CryptFS {
         return Err(libc::EROFS);
     }
 
+    fn truncate(&self, _req: RequestInfo, _path: &Path, _fh: Option<u64>, _size: u64) -> ResultEmpty {
+        debug!("truncate() called");
+        // read only filesystem
+        return Err(libc::EROFS);
+    }
+
     fn utimens(&self, _req: RequestInfo, _path: &Path, _fh: Option<u64>, _atime: Option<SystemTime>, _mtime: Option<SystemTime>) -> ResultEmpty {
         debug!("utimens() called");
         // read only filesystem
@@ -139,14 +165,13 @@ impl FilesystemMT for CryptFS {
 
     fn utimens_macos(&self, _req: RequestInfo, _path: &Path, _fh: Option<u64>, _crtime: Option<std::time::SystemTime>, _chgtime: Option<std::time::SystemTime>, _bkuptime: Option<std::time::SystemTime>, _flags: Option<u32>) -> ResultEmpty {
         debug!("utimens_macos() called");
-        // not implemented, this is a linux only filesystem
-        return Err(libc::ENOSYS);
+        return Err(libc::EROFS)     //read only filesystem & macOS only
     }
 
     fn readlink(&self, _req: RequestInfo, _path: &Path) -> ResultData {
-        // TODO: figure what error code to throw
         debug!("readlink() called");
-        return Err(libc::ENOSYS);
+        // there should be no symlinks in this filesystem
+        return Err(libc::EINVAL);
     }
 
     fn mknod(&self, _req: RequestInfo, _parent: &Path, _name: &std::ffi::OsStr, _mode: u32, _rdev: u32) -> ResultEntry {
@@ -193,14 +218,52 @@ impl FilesystemMT for CryptFS {
 
     fn open(&self, _req: RequestInfo, _path: &Path, _flags: u32) -> ResultOpen {
         debug!("open() called");
-        // TODO: implement
-        return Err(libc::ENOSYS);
+
+        let real_path = self.get_real_path(_path);
+        self.check_path(&real_path)?;
+        
+        // if _flags == (libc::O_CREAT as u32 || libc::O_EXCL as u32) {
+        //     // file creation not supported
+        //     return Err(libc::EROFS);
+        // }
+
+        // get file handle
+        let fd = fs::OpenOptions::new().read(true).open(real_path).unwrap().into_raw_fd() as u64;
+        let flags = libc::O_RDONLY as u32;
+
+        return Ok((fd, flags));
     }
 
     fn read(&self, _req: RequestInfo, _path: &Path, _fh: u64, _offset: u64, _size: u32, callback: impl FnOnce(ResultSlice<'_>) -> CallbackResult) -> CallbackResult {
         debug!("read() called");
-        // TODO: implement
-        return Err(libc::ENOSYS);
+        
+        // convert fd to file
+        // let file = unsafe { fs::File::from_raw_fd(_fh as i32) };
+        let file = fs::File::open(self.get_real_path(_path)).unwrap();
+        let file_size = file.metadata().unwrap().len();
+        let mut size = _size as usize;
+
+        if _offset >= file_size {
+            // offset is past the end of the file
+
+            // forget(file);   // do not close file, it will be closed when the fd is closed
+            return callback(Ok(&[]));
+        }
+
+        if _offset + size as u64 > file_size {
+            // read past the end of the file
+            size = (file_size - _offset) as usize;
+        }
+
+        // read just the requested bytes
+        let mut buf = Vec::<u8>::with_capacity(size as usize);
+        unsafe { buf.set_len(size as usize) };          // set length so the read_exact_at will read everthing into the buffer
+
+        file.read_exact_at(buf.as_mut_slice(), _offset).unwrap();
+
+        // forget(file); 
+        return callback(Ok(buf.as_slice()));
+
     }
 
     fn write(&self, _req: RequestInfo, _path: &Path, _fh: u64, _offset: u64, _data: Vec<u8>, _flags: u32) -> ResultWrite {
@@ -211,20 +274,22 @@ impl FilesystemMT for CryptFS {
 
     fn flush(&self, _req: RequestInfo, _path: &Path, _fh: u64, _lock_owner: u64) -> ResultEmpty {
         debug!("flush() called");
-        // TODO figure out what this does
-        return Err(libc::ENOSYS);
+        return Ok(());  // TODO: implement locking, maybe...
     }
 
     fn release(&self, _req: RequestInfo, _path: &Path, _fh: u64, _flags: u32, _lock_owner: u64, _flush: bool) -> ResultEmpty {
         debug!("release() called");
-        // TODO: implement
-        return Err(libc::ENOSYS);
+        
+        // convert fd to file
+        let file = unsafe { fs::File::from_raw_fd(_fh as i32) };    // rust will close the file when it goes out of scope
+
+        return Ok(());
     }
 
     fn fsync(&self, _req: RequestInfo, _path: &Path, _fh: u64, _datasync: bool) -> ResultEmpty {
         debug!("fsync() called");
-        // read only filesystem
-        return Err(libc::EROFS);
+        // read only filesystem, so nothing to do
+        return Ok(())
     }
 
     fn opendir(&self, _req: RequestInfo, _path: &Path, _flags: u32) -> ResultOpen {
@@ -275,8 +340,7 @@ impl FilesystemMT for CryptFS {
 
     fn fsyncdir(&self, _req: RequestInfo, _path: &Path, _fh: u64, _datasync: bool) -> ResultEmpty {
         debug!("fsyncdir() called");
-        // read only filesystem
-        return Err(libc::EROFS);
+        return Ok(());  // nothing to do
     }
 
     fn statfs(&self, _req: RequestInfo, _path: &Path) -> ResultStatfs {
@@ -311,8 +375,8 @@ impl FilesystemMT for CryptFS {
 
     fn access(&self, _req: RequestInfo, _path: &Path, _mask: u32) -> ResultEmpty {
         debug!("access() called");
-        // TODO: implement
-        return Err(libc::ENOSYS);
+        // TODO: see if this is needed or if cloning the file permission is enough
+        return Err(libc::ENOSYS)
     }
 
     fn create(&self, _req: RequestInfo, _parent: &Path, _name: &OsStr, _mode: u32, _flags: u32) -> ResultCreate {

@@ -1,6 +1,9 @@
 use fuse_mt;
 use log::debug;
 
+
+use std::{io::{self, prelude::*}, fs, os::unix::prelude::FileExt};
+
 mod crypt_fs;
 
 struct ConsoleLogger;
