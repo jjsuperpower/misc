@@ -7,16 +7,22 @@ use std::{fs, os::linux::fs::MetadataExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use fuse_mt::*;
-use openssl::symm::Cipher;
+use openssl::symm::{Cipher, encrypt};
+use openssl::hash::{hash, MessageDigest};
+use sha2::Sha256;
+use hmac::{Hmac, Mac};
 use log::{debug, error};
-
 use libc;
 
 // const BLOCK_SIZE: usize = 16;
 const AES_128_KEY_SIZE: usize = 16;
 const AES_256_KEY_SIZE: usize = 32;
-
+const AES_BLOCK_SIZE: usize = 16;
+const HEADER_SIZE: usize = AES_BLOCK_SIZE*2;      // must be >= AES_BLOCK_SIZE, 32 = SHA256 digest size
 const TTL: Duration = Duration::from_secs(1);
+
+type HmacSha256 = Hmac<Sha256>;
+
 
 pub struct CryptFS   {
     cipher: Cipher,
@@ -50,6 +56,39 @@ impl CryptFS {
             src_dir: src_dir,
         };
     }
+
+    /// read file with offset and size, but will make sure to be block alligned and read whole blocks
+    /// returns a tuple with the data and the sice of the data to read (start and end)
+    // fn read_file_blocks(file: &std::fs::File, offset: u64, size: u32) -> Result<(Vec<u8>, usize, usize),()>    {
+    //     let file_size = file.metadata().unwrap().len();
+    //     let mut size = size as u64;     // avoid converting to u64 multiple times
+
+    //     if size > file_size {
+    //         size = file_size;
+    //     }
+
+    //     if offset >= file_size {
+    //         return Err(());    // read past the end of the file
+    //     }
+
+    //     let block_offset = offset % (AES_BLOCK_SIZE as u64);
+    //     let mut new_size: u64 = size + (size % AES_BLOCK_SIZE as u64) + block_offset;     // adjust size for block allignment, on both sides
+    //     let new_offset: u64 = if offset > block_offset { offset - block_offset } else { 0 };    // if in the middle of the first block, read from the beginning of the file
+
+    //     // bounds check
+    //     if new_offset + new_size > file_size {
+    //         new_size = file_size - new_offset;
+    //     }
+
+    //     // read just the requested bytes
+    //     let mut buf = Vec::<u8>::with_capacity(new_size as usize);
+    //     unsafe { buf.set_len(new_size as usize) };              // set length so the read_exact_at will read everthing into the buffer
+
+    //     file.read_exact_at(buf.as_mut_slice(), new_offset).unwrap();
+
+    //     return Ok((buf, (new_offset - offset) as usize, (offset + size) as usize));
+
+    // }
 
     fn check_path(&self, path: &Path) -> Result<(), libc::c_int> {
         if (path.is_dir()|| path.is_file()) && !path.is_symlink() {
@@ -114,8 +153,16 @@ impl FilesystemMT for CryptFS {
 
         match fs::metadata(real_path) {
             Ok(metadata) => {
+                let size = metadata.len();
+                let mut new_size = size;
+
+                if metadata.is_file() && size > 0 {
+                    let aes_padding = AES_BLOCK_SIZE as u64 - (size % AES_BLOCK_SIZE as u64);
+                    new_size = HEADER_SIZE as u64 + size + aes_padding;
+                }
+
                 let f_attr = FileAttr {
-                    size: metadata.len(),
+                    size: new_size,
                     blocks: metadata.st_blocks(),
                     atime: metadata.accessed().unwrap(),
                     mtime: metadata.modified().unwrap(),
@@ -237,32 +284,43 @@ impl FilesystemMT for CryptFS {
     fn read(&self, _req: RequestInfo, _path: &Path, _fh: u64, _offset: u64, _size: u32, callback: impl FnOnce(ResultSlice<'_>) -> CallbackResult) -> CallbackResult {
         debug!("read() called");
         
-        // convert fd to file
-        // let file = unsafe { fs::File::from_raw_fd(_fh as i32) };
-        let file = fs::File::open(self.get_real_path(_path)).unwrap();
+        let file = unsafe { fs::File::from_raw_fd(_fh as i32) };
         let file_size = file.metadata().unwrap().len();
-        let mut size = _size as usize;
 
-        if _offset >= file_size {
-            // offset is past the end of the file
-
-            // forget(file);   // do not close file, it will be closed when the fd is closed
+        let buf_size;
+        if file_size > 0 {
+            buf_size = file_size + HEADER_SIZE as u64;
+        } else {
             return callback(Ok(&[]));
         }
+        
+        let mut buf = Vec::<u8>::with_capacity(buf_size as usize);
+        unsafe { buf.set_len(buf_size as usize) };
 
-        if _offset + size as u64 > file_size {
-            // read past the end of the file
-            size = (file_size - _offset) as usize;
-        }
+        file.read_exact_at(&mut buf[HEADER_SIZE..], 0).unwrap();    // read the whole file
 
-        // read just the requested bytes
-        let mut buf = Vec::<u8>::with_capacity(size as usize);
-        unsafe { buf.set_len(size as usize) };          // set length so the read_exact_at will read everthing into the buffer
+        // get iv from file hash, this makes it repeatable for the same file
+        let iv = &hash(MessageDigest::md5(), &buf[HEADER_SIZE..]).unwrap()[..];
 
-        file.read_exact_at(buf.as_mut_slice(), _offset).unwrap();
+        // encrypt the file
+        let mut enc_buf = encrypt(self.cipher, self.key.as_bytes(), Some(iv), &buf).unwrap();
 
-        // forget(file); 
-        return callback(Ok(buf.as_slice()));
+        // cmpute mac
+        let mut mac = HmacSha256::new_from_slice(self.key.as_bytes()).unwrap();
+        mac.update(&enc_buf[HEADER_SIZE..]);
+        let mac = mac.finalize().into_bytes();
+
+        // replace dummy header with mac
+        enc_buf[..HEADER_SIZE].copy_from_slice(&mac[..HEADER_SIZE]);
+
+
+        // if we don't want to read the whole file, adjust the buffer
+        let _size = if _size as usize > enc_buf.len() {enc_buf.len()} else { _size  as usize};
+        let begin = _offset as usize;
+        let end = (_offset as usize + _size) as usize;
+
+        forget(file);  
+        return callback(Ok(&enc_buf[begin..end]));
 
     }
 
