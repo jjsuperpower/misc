@@ -1,0 +1,6 @@
+MNIST/
+
+*.tar.gz
+*.tar
+
+__pycache__/
