@@ -1,10 +1,10 @@
 use fuse_mt;
 use log::debug;
-
-
-use std::{io::{self, prelude::*}, fs, os::unix::prelude::FileExt};
+// use std::{io::{self, prelude::*}, fs, os::unix::prelude::FileExt};
 
 mod crypt_fs;
+
+use crypt_fs::{CryptFS, Mode};
 
 struct ConsoleLogger;
 
@@ -39,7 +39,7 @@ fn main() -> std::io::Result<()> {
     let src_path = "src_dir";
     let mnt_path = "mnt_dir";
     let key = "012345689abcdefg";
-    let crypt_fs = crypt_fs::CryptFS::new(String::from(key), String::from(src_path));
+    let crypt_fs = CryptFS::new(String::from(key), String::from(src_path), crypt_fs::Mode::Encrypt);
 
     // // test read file
     // let filepath = Path::new("plaintext.txt");
