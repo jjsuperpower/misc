@@ -1,13 +1,15 @@
 use std::ffi::OsStr;
-use std::io::{self, prelude::*};
+use std::io::Read;
 use std::mem::forget;
 use std::os::fd::{IntoRawFd, FromRawFd, RawFd};
 use std::{fs, os::linux::fs::MetadataExt};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, SystemTime};
 use fuse_mt::*;
-use log::{debug, error};
 use libc;
+
+#[allow(unused_imports)]
+use log::{debug, error};
 
 use super::CryptFS;
 
@@ -59,7 +61,7 @@ impl FilesystemMT for CryptFS {
         };
 
         let f_attr = FileAttr {
-            size: if metadata.is_file() { self.get_read_size(&file)} else { metadata.len() },
+            size: if metadata.is_file() { self.get_crypt_read_size(&file)} else { metadata.len() },
             blocks: metadata.st_blocks(),
             atime: metadata.accessed().unwrap(),
             mtime: metadata.modified().unwrap(),
@@ -179,9 +181,34 @@ impl FilesystemMT for CryptFS {
     fn read(&self, _req: RequestInfo, _path: &Path, _fh: u64, _offset: u64, _size: u32, callback: impl FnOnce(ResultSlice<'_>) -> CallbackResult) -> CallbackResult {
         debug!("read() called");
         let file = unsafe { fs::File::from_raw_fd(_fh as i32) };
-        
-        return callback(Ok(&[]));
 
+        let file_size = file.metadata().unwrap().len();
+
+        if file_size == 0 {
+            return callback(Ok(&[]));
+        }
+
+        let file_data = self.crypt_read_file(&file);
+        
+        let crypt_file = match self.crypt_translate(&file_data, file_size) {
+            Ok(crypt_file) => crypt_file,
+            Err(_) => return callback(Err(libc::EIO)),
+        };
+
+        if _offset > crypt_file.len() as u64 {
+            return callback(Ok(&[]));
+        }
+
+        let file_part;
+
+        if _size as u64 + _offset > crypt_file.len() as u64 {
+            file_part = &crypt_file[_offset as usize..];
+        } else {
+            file_part = &crypt_file[_offset as usize.._offset as usize + _size as usize];
+        }
+        
+        forget(file);   // or rust will close the file when it goes out of scope, which is a no-no
+        return callback(Ok(file_part));
     }
 
     fn write(&self, _req: RequestInfo, _path: &Path, _fh: u64, _offset: u64, _data: Vec<u8>, _flags: u32) -> ResultWrite {
@@ -228,6 +255,7 @@ impl FilesystemMT for CryptFS {
 
         let mut entries: Vec<DirectoryEntry> = Vec::new();
 
+        // read_dir needs to open the file again, as it calls both opendir() and readdir() and readir underneath
         for entry in fs::read_dir(real_path.as_path()).unwrap()  {
             let entry = entry.unwrap();
             let path = entry.path();
