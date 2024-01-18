@@ -5,6 +5,7 @@ use openssl::symm::{Cipher, Crypter, Mode as CryptoMode};
 use openssl::hash::{hash, MessageDigest};
 use sha2::Sha256;
 use hmac::{Hmac, Mac};
+use thiserror::Error;
 
 #[allow(unused_imports)]
 use log::{debug, info, error};
@@ -32,18 +33,32 @@ type HmacSha256 = Hmac<Sha256>;
 
 mod fuse;
 
-#[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum CryptMode {
     Encrypt,
     Decrypt,
+}
+
+#[derive(Debug, Error)]
+enum CryptError {
+    #[error("Internal error occured")]
+    InternalErrror,
+    #[error("Crypt key is invalid")]
+    Invalid_key,
+    #[error("Path is does not exist")]
+    Invalid_path,
+    #[error("Path is not a regular file or directory")]
+    Not_regular_file,
+    #[error("File size is invalid")]
+    Invalid_file_size,
+    #[error("MAC mismatch")]
+    Mac_mismatch,
 }
 
 pub struct CryptFS   {
     cipher: Cipher,
     key: String,
     src_dir: PathBuf,
-    mode: CryptMode,
 }
 
 impl CryptFS {
@@ -60,7 +75,7 @@ impl CryptFS {
     /// # Panics
     /// Panics if the directory does not exist.
     /// Panics if the key is not 16 or 32 bytes.
-    pub fn new(key: String, src_dir_path: String, mode: CryptMode) -> Self {
+    pub fn new(key: String, src_dir_path: String) -> Self {
         // check directory exists
         if !fs::metadata(src_dir_path.clone()).is_ok() {
             error!("Directory does not exist");
@@ -82,7 +97,6 @@ impl CryptFS {
             cipher: cipher,
             key: key,
             src_dir: src_dir,
-            mode: mode,
         };
     }
 
@@ -250,15 +264,14 @@ impl CryptFS {
     /// A vector of bytes containing the encrypted data with the header and padding
     /// 
     /// # Panics
-    /// * Panics if md5 hash fails
-    /// * Panics if `_encrypt`` fn fails
+    /// If the buffer is not the correct size
     fn encrypt(&self, data: &Vec<u8>, orig_size: u64) -> Result<Vec<u8>,()> {
 
         // get iv from file hash, this makes it repeatable for the same file
-        let iv = &hash(MessageDigest::md5(), &data[HEADER_SIZE..]).unwrap()[..];
+        let iv = &hash(MessageDigest::md5(), &data[HEADER_SIZE..]).map_err(|_|{()})?[..];
 
         // encrypt the file
-        let mut enc_buf = self._encrypt(data.as_slice(), Some(&iv)).unwrap();
+        let mut enc_buf = self._encrypt(data.as_slice(), Some(&iv))?;
 
         // add size of original file to header
         enc_buf[ORIG_FSIZE_OFFSET..ORIG_FSIZE_OFFSET+ORIG_FSIZE_SIZE].copy_from_slice(&orig_size.to_be_bytes());
@@ -288,6 +301,7 @@ impl CryptFS {
         let file_mac = &data[MAC_OFFSET..MAC_OFFSET+MAC_SIZE];
         let computed_mac = self.compute_sha256_hmac(&data[ORIG_FSIZE_OFFSET..]);
 
+        // TODO: Add more explicit error types
         for i in 0..MAC_SIZE {
             if file_mac[i] != computed_mac[i] {
                 error!("MAC mismatch");
@@ -307,10 +321,17 @@ impl CryptFS {
 
     /// Translates file data using the mode specified
     /// Calls encrypt or decrypt depending on the mode
-    fn crypt_translate(&self, data: &Vec<u8>, orig_size: u64, mode: CryptMode) -> Result<Vec<u8>,()> {
+    fn crypt_translate(&self, file: &fs::File, mode: CryptMode) -> Result<Vec<u8>,()> {
+        let file_data = self.crypt_read_file(file, mode);
+
         return match mode {
-            CryptMode::Encrypt => self.encrypt(data, orig_size),
-            CryptMode::Decrypt => self.decrypt(data),
+            CryptMode::Encrypt => {
+                let orig_size = file.metadata().unwrap().len();
+                self.encrypt(&file_data, orig_size)
+            }
+            CryptMode::Decrypt => {
+                self.decrypt(&file_data)
+            },
         };
     }
 

@@ -2,7 +2,7 @@ use std::ffi::{OsStr, OsString};
 use std::mem::forget;
 use std::os::fd::{IntoRawFd, FromRawFd, RawFd};
 use std::{fs, os::linux::fs::MetadataExt};
-use std::path::{Path, PathBuf, self};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use fuse_mt::*;
 use libc;
@@ -161,7 +161,7 @@ impl FilesystemMT for CryptFS {
 
         let source_path = get_source_path(&self, _path)?;
 
-        let file = match fs::File::open(source_path) {
+        let file = match fs::File::open(&source_path) {
             Ok(file) => file,
             Err(_) => return Err(libc::ENOENT),
         };
@@ -297,13 +297,17 @@ impl FilesystemMT for CryptFS {
             return callback(Ok(&[]));
         }
 
-        let mode = get_crypt_mode(_path);
-
-        let file_data = self.crypt_read_file(&file, mode);
+        // TODO: use file that has been opened, not the path requested, possible security issue?
+        let mode;
+        if _path.extension() == Some(OsStr::new("crypt")) {     // The handle is for the source file, the path is for the fuse file
+            mode = CryptMode::Encrypt;                          // The fuse file should be an encrypted version of the source file
+        } else {
+            mode = CryptMode::Decrypt;                          // The fuse file should be a decrypted version of the source file
+        }
         
-        let crypt_file = match self.crypt_translate(&file_data, file_size, ) {
+        let crypt_file = match self.crypt_translate(&file, mode) {
             Ok(crypt_file) => crypt_file,
-            Err(_) => return callback(Err(libc::EIO)),
+            Err(_) => return callback(Err(libc::EIO)),      //TODO: Add error message
         };
 
         if _offset > crypt_file.len() as u64 {
