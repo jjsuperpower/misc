@@ -1,39 +1,147 @@
-use std::ffi::OsStr;
-use std::io::Read;
+use std::ffi::{OsStr, OsString};
 use std::mem::forget;
 use std::os::fd::{IntoRawFd, FromRawFd, RawFd};
 use std::{fs, os::linux::fs::MetadataExt};
-use std::path::Path;
+use std::path::{Path, PathBuf, self};
 use std::time::{Duration, SystemTime};
 use fuse_mt::*;
 use libc;
 
 #[allow(unused_imports)]
-use log::{debug, error};
+use log::{debug, error, info};
 
-use super::CryptFS;
+use super::{CryptFS, CryptMode};
 
 const TTL: Duration = Duration::from_secs(1);
 
 
+/// Add or remove the .crypt extension from a path
+/// If the file already has the .crypt extension, it will be removed
+/// If the file does not have the .crypt extension, it will be added
+/// 
+/// # Arguments
+/// `&Path` - Source file path
+/// 
+/// # Returns
+/// `PathBuf` - Path with .crypt extension added or removed
+fn _toggle_extension(path: &Path) -> std::path::PathBuf {
+    let mut path_buf = path.to_path_buf();
+    let ext = path_buf.extension();
 
-fn check_path(path: &Path) -> Result<(), libc::c_int> {
+    if ext == Some(OsStr::new("crypt")) {
+        path_buf.set_extension("");
+    } else {
+        let new_extention = match ext {
+            Some(ext) => format!("{}.crypt", ext.to_str().unwrap()),
+            None => String::from("crypt"),
+        };
+
+        path_buf.set_extension(new_extention);
+    }
+    
+    return path_buf;
+}
+
+/// Checks if the path is a regular file or directory
+/// It will reject symlinks and special files
+/// 
+/// # Arguments
+/// `&Path` - Source file path
+/// 
+/// # Returns
+/// `true` if path is a regular file or directory
+/// `false` if path is not a regular file or directory
+fn is_path_allowed(path: &Path) -> bool {
     if (path.is_dir()|| path.is_file()) && !path.is_symlink() {
         // check if file a regular file or directory
-        return Ok(());
+        return true;
     } else {
-        return Err(libc::ENOENT);
+        return false;
     }
 }
 
-fn check_dir(path: &Path) -> Result<(), libc::c_int> {
+/// Checks if the path is a directory
+/// It will reject symlinks and special files
+/// 
+/// # Arguments
+/// `&Path` - Source file path
+/// 
+/// # Returns
+/// `true` if path is a directory
+/// `false` if path is not a directory or is a symlink
+#[allow(dead_code)]
+fn check_is_dir(path: &Path) -> bool {
     if path.is_dir() && !path.is_symlink() {
         // check if file a regular file or directory
-        return Ok(());
+        return true;
     } else {
-        return Err(libc::ENOTDIR);
+        return false;
     }
 }
+
+/// Returns the real path of a file
+/// This is used by the fuse module to get the real path of a fuse file
+/// This involves modifyin the directory path and adding or removing the .crypt extension (for files)
+/// 
+/// # Arguments
+/// `&Path` - Path of the fuse file
+/// 
+/// # Returns
+/// `Ok(PathBuf)` - Real path of the file
+/// `Err(libc::ENOENT)` - If the path is not a valid path
+fn get_source_path(cryptfs: &CryptFS, path: &Path) -> Result<PathBuf, libc::c_int> {
+
+    // Files are given the .crypt extension when encrypted.
+    // The extension is removed when the file is decrypted.
+    // Directories are not given the .crypt extension.
+    // The user will not query fuse with the correct file extension
+    // In order for this code to work correctly, we must try both with and without the .crypt extension
+    // to know if the source file is a directory or regular file
+    let source_path = cryptfs.get_mapped_path(path);
+    let source_path_alt = _toggle_extension(&source_path);
+
+    // which path exists
+    if source_path.exists() {
+        match is_path_allowed(&source_path) {
+            true => return Ok(source_path),
+            false => {
+                debug!("get_source_path() path: {} is not allowed", source_path.display());
+                return Err(libc::ENOENT);
+            }
+        };
+    }
+
+    if source_path_alt.exists() {
+        match is_path_allowed(&source_path_alt) {
+            true => return Ok(source_path_alt),
+            false => {
+                debug!("get_source_path() path: {} is not allowed", source_path.display());
+                return Err(libc::ENOENT);
+            }
+        };
+    }
+
+    debug!("get_source_path() failed to find source path");
+    return Err(libc::ENOENT);
+}
+
+/// Gets the the crypt mode based on the file extension
+/// If the source file has the .crypt extension, it will be decrypted
+/// If the source file does not have the .crypt extension, it will be encrypted
+/// 
+/// # Arguments
+/// `&Path` - Path of the fuse file
+/// 
+/// # Returns
+/// `CryptMode::Decrypt` - If the file has the .crypt extension
+fn get_crypt_mode(path: &Path) -> CryptMode {
+    if path.extension() == Some(OsStr::new("crypt")) {
+        return CryptMode::Decrypt;
+    } else {
+        return CryptMode::Encrypt;
+    }
+}
+
 
 impl FilesystemMT for CryptFS {
     fn init(&self, _req: RequestInfo) -> ResultEmpty {
@@ -45,12 +153,15 @@ impl FilesystemMT for CryptFS {
         debug!("destroy() called");
     }
 
+    /// Gets attributes of a source file
+    /// This will modify the size of the source file to match the size
+    /// after encryption
     fn getattr(&self, _req: RequestInfo, _path: &Path, _fh: Option<u64>) -> ResultEntry {
         debug!("getattr() called");
-        let real_path = self.get_real_path(_path);
-        check_path(&real_path)?;       // don't follow symlinks, or special files
 
-        let file = match fs::File::open(real_path) {
+        let source_path = get_source_path(&self, _path)?;
+
+        let file = match fs::File::open(source_path) {
             Ok(file) => file,
             Err(_) => return Err(libc::ENOENT),
         };
@@ -60,8 +171,10 @@ impl FilesystemMT for CryptFS {
             Err(_) => return Err(libc::ENOENT),
         };
 
+        let mode = get_crypt_mode(&source_path);
+
         let f_attr = FileAttr {
-            size: if metadata.is_file() { self.get_crypt_read_size(&file)} else { metadata.len() },
+            size: if metadata.is_file() { self.get_crypt_read_size(&file, mode)} else { metadata.len() },
             blocks: metadata.st_blocks(),
             atime: metadata.accessed().unwrap(),
             mtime: metadata.modified().unwrap(),
@@ -77,8 +190,6 @@ impl FilesystemMT for CryptFS {
         };
 
         return Ok((TTL,f_attr));
-
-        
     }
 
     fn chmod(&self, _req: RequestInfo, _path: &Path, _fh: Option<u64>, _mode: u32) -> ResultEmpty {
@@ -160,18 +271,17 @@ impl FilesystemMT for CryptFS {
 
     fn open(&self, _req: RequestInfo, _path: &Path, _flags: u32) -> ResultOpen {
         debug!("open() called");
-        // TODO: check requested flags and get file handle accordingly
 
-        let real_path = self.get_real_path(_path);
-        check_path(&real_path)?;
+        let source_path = get_source_path(&self, _path)?; // get source path and check if it exists
         
+        // TODO: check requested flags
         // if _flags == (libc::O_CREAT as u32 || libc::O_EXCL as u32) {
         //     // file creation not supported
         //     return Err(libc::EROFS);
         // }
 
         // get file handle
-        let fd = fs::OpenOptions::new().read(true).open(real_path).unwrap().into_raw_fd() as u64;
+        let fd = fs::OpenOptions::new().read(true).open(source_path).unwrap().into_raw_fd() as u64;
         let flags = libc::O_RDONLY as u32;
         forget(fd);     // otherwise rust will close the file when it goes out of scope
 
@@ -181,16 +291,17 @@ impl FilesystemMT for CryptFS {
     fn read(&self, _req: RequestInfo, _path: &Path, _fh: u64, _offset: u64, _size: u32, callback: impl FnOnce(ResultSlice<'_>) -> CallbackResult) -> CallbackResult {
         debug!("read() called");
         let file = unsafe { fs::File::from_raw_fd(_fh as i32) };
-
         let file_size = file.metadata().unwrap().len();
 
         if file_size == 0 {
             return callback(Ok(&[]));
         }
 
-        let file_data = self.crypt_read_file(&file);
+        let mode = get_crypt_mode(_path);
+
+        let file_data = self.crypt_read_file(&file, mode);
         
-        let crypt_file = match self.crypt_translate(&file_data, file_size) {
+        let crypt_file = match self.crypt_translate(&file_data, file_size, ) {
             Ok(crypt_file) => crypt_file,
             Err(_) => return callback(Err(libc::EIO)),
         };
@@ -239,10 +350,8 @@ impl FilesystemMT for CryptFS {
 
     fn opendir(&self, _req: RequestInfo, _path: &Path, _flags: u32) -> ResultOpen {
         debug!("opendir() called");
-        let real_path = self.get_real_path(_path);
-        check_dir(&real_path)?;
-        
-        let handle = fs::File::open(real_path).unwrap().into_raw_fd() as u64;
+        let source_path = get_source_path(&self, _path)?;
+        let handle = fs::File::open(source_path).unwrap().into_raw_fd() as u64;
         return Ok((handle, 0));
     }
 
@@ -250,24 +359,36 @@ impl FilesystemMT for CryptFS {
         // It would be better to use the libc::readdir() function, but for now I'll just use rust's fs::read_dir()
         debug!("readdir() called");
 
-        let real_path = self.get_real_path(_path);
-        check_dir(&real_path)?;
-
+        let source_path = match get_source_path(&self, _path) {
+            Ok(source_path) => source_path,
+            Err(_) => return Err(libc::ENOENT),
+        };
         let mut entries: Vec<DirectoryEntry> = Vec::new();
 
         // read_dir needs to open the file again, as it calls both opendir() and readdir() and readir underneath
-        for entry in fs::read_dir(real_path.as_path()).unwrap()  {
+        for entry in fs::read_dir(source_path.as_path()).unwrap()  {
             let entry = entry.unwrap();
-            let path = entry.path();
-
+            let source_path = entry.path();
+            
             // make sure is either regular file or directory
-            match check_path(&path) {
-                Ok(_) => {},
-                Err(_) => { continue; }
+            if !is_path_allowed(&source_path) {
+                continue;
             }
 
+            let path;
+            if !source_path.is_dir() {
+                path = _toggle_extension(&source_path);
+            } else {
+                path = source_path;
+            }
+
+            let name: OsString = match path.file_name() {
+                Some(name) => name.to_owned(),
+                None => continue,
+            };
+
             entries.push(DirectoryEntry {
-                name: entry.file_name(),
+                name: name,
                 kind: if path.is_dir() { FileType::Directory } else { FileType::RegularFile }
             });
         }
