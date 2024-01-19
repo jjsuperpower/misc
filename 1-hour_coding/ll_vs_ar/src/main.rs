@@ -64,6 +64,11 @@ fn test_vec() {
     random_insert_vec(&mut vec_100, 10_000);
     let duration = start.elapsed();
     println!("Took {:?} to insert 10 Thousand elements at random indicies into a Vector with 100 Million existing elements", duration);
+
+    drop(vec_1);
+    drop(vec_10);
+    drop(vec_100);
+
 }
 
 
@@ -102,10 +107,14 @@ fn test_ll()    {
     let duration = start.elapsed();
     println!("Took {:?} to insert 10 Thousand elements at random indicies into a LinkedList with 100 Million existing elements", duration);
 
+    drop(ll_1);
+    drop(ll_10);
+    drop(ll_100);
+
 }
 
 fn main() {
-    test_ll();
-    print!("-----------------------------------------------\n");
     test_vec();
+    print!("---------------------------------------------------\n");
+    test_ll();
 }
