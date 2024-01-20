@@ -10,10 +10,10 @@ use libc;
 #[allow(unused_imports)]
 use log::{debug, error, info};
 
-use super::{CryptFS, CryptMode};
+use super::{CryptFS, CryptMode, CryptfsError};
 
 const TTL: Duration = Duration::from_secs(1);
-
+const CRYPT_FLAG_BIT: u64 = 1 << 32;
 
 /// Add or remove the .crypt extension from a path
 /// If the file already has the .crypt extension, it will be removed
@@ -87,8 +87,10 @@ fn check_is_dir(path: &Path) -> bool {
 /// `&Path` - Path of the fuse file
 /// 
 /// # Returns
-/// `Ok(PathBuf)` - Real path of the file
-/// `Err(libc::ENOENT)` - If the path is not a valid path
+/// `PathBuf` - Path of the source file
+/// 
+/// # Errors
+/// `libc::ENOENT` - If the source file does not exist
 fn get_source_path(cryptfs: &CryptFS, path: &Path) -> Result<PathBuf, libc::c_int> {
 
     // Files are given the .crypt extension when encrypted.
@@ -143,6 +145,23 @@ fn get_crypt_mode(path: &Path) -> CryptMode {
 }
 
 
+/// Logs the error message to the console
+/// 
+/// # Arguments
+/// `CryptfsError` - Error message to log
+/// `Option<&Path>` - Path of the file that caused the error
+/// 
+fn log_error(err: CryptfsError, path: Option<&Path>) {
+    if let Some(path) = path {
+        error!("CryptfsError: {} for file: {}", err, path.display());
+    } else {
+        error!("CryptfsError: {}", err);
+    }
+}
+
+
+
+
 impl FilesystemMT for CryptFS {
     fn init(&self, _req: RequestInfo) -> ResultEmpty {
         debug!("init() called");
@@ -172,9 +191,16 @@ impl FilesystemMT for CryptFS {
         };
 
         let mode = get_crypt_mode(&source_path);
+        let size = match self.get_crypt_read_size(&file, mode) {
+            Ok(size) => size,
+            Err(e) => {
+                log_error(e, Some(&_path));
+                return Err(libc::EIO);
+            }
+        };
 
         let f_attr = FileAttr {
-            size: if metadata.is_file() { self.get_crypt_read_size(&file, mode)} else { metadata.len() },
+            size: if metadata.is_file() { size } else { metadata.len() },
             blocks: metadata.st_blocks(),
             atime: metadata.accessed().unwrap(),
             mtime: metadata.modified().unwrap(),
@@ -281,9 +307,18 @@ impl FilesystemMT for CryptFS {
         // }
 
         // get file handle
-        let fd = fs::OpenOptions::new().read(true).open(source_path).unwrap().into_raw_fd() as u64;
+        let fd = fs::OpenOptions::new().read(true).open(&source_path).unwrap().into_raw_fd() as u64;
         let flags = libc::O_RDONLY as u32;
-        forget(fd);     // otherwise rust will close the file when it goes out of scope
+
+        // // We add a bit to the front of the fd to indicate if the file is encrypted or not
+        // // First check if MSB bit is set, this *should* never happen (it technically could, but it's very unlikely)
+        // // as the fd is incremented by 1 each time a file is opened, we should never need to open more than 2^63 files
+        // if fd & (1 << 63) != 0 {
+        //     error!("File descriptor MSB bit is set, this should never happen");
+        //     return Err(libc::EIO);
+        // }
+        // let mode = get_crypt_mode(&source_path);
+        // fd = fd | (mode as u64) << 63;
 
         return Ok((fd, flags));
     }
@@ -307,7 +342,10 @@ impl FilesystemMT for CryptFS {
         
         let crypt_file = match self.crypt_translate(&file, mode) {
             Ok(crypt_file) => crypt_file,
-            Err(_) => return callback(Err(libc::EIO)),      //TODO: Add error message
+            Err(e) => {
+                log_error(e, Some(&_path));
+                return callback(Err(libc::EIO)) 
+            }
         };
 
         if _offset > crypt_file.len() as u64 {
