@@ -7,23 +7,26 @@ use std::time::{Duration, SystemTime};
 use fuse_mt::*;
 use libc;
 
+use anyhow;
+
 #[allow(unused_imports)]
 use log::{debug, error, info};
+use openssl::stack;
 
-use super::{CryptFS, CryptMode, CryptfsError};
+use super::{CryptFS, CryptMode, CryptFSError};
 
 const TTL: Duration = Duration::from_secs(1);
 const CRYPT_FLAG_BIT: u64 = 1 << 32;
 
 /// Add or remove the .crypt extension from a path
 /// If the file already has the .crypt extension, it will be removed
-/// If the file does not have the .crypt extension, it will be added
+/// If the file does not have the .crypt extension, it will be appended
 /// 
 /// # Arguments
-/// `&Path` - Source file path
+/// A path to toggle the extension of
 /// 
 /// # Returns
-/// `PathBuf` - Path with .crypt extension added or removed
+/// Path with .crypt extension added or removed
 fn _toggle_extension(path: &Path) -> std::path::PathBuf {
     let mut path_buf = path.to_path_buf();
     let ext = path_buf.extension();
@@ -46,37 +49,42 @@ fn _toggle_extension(path: &Path) -> std::path::PathBuf {
 /// It will reject symlinks and special files
 /// 
 /// # Arguments
-/// `&Path` - Source file path
+/// Source file path
 /// 
 /// # Returns
 /// `true` if path is a regular file or directory
 /// `false` if path is not a regular file or directory
+#[inline]
 fn is_path_allowed(path: &Path) -> bool {
-    if (path.is_dir()|| path.is_file()) && !path.is_symlink() {
-        // check if file a regular file or directory
-        return true;
-    } else {
-        return false;
-    }
+    return (path.is_dir()|| path.is_file()) && !path.is_symlink();
 }
 
 /// Checks if the path is a directory
 /// It will reject symlinks and special files
 /// 
 /// # Arguments
-/// `&Path` - Source file path
+/// Path of the directory to check
 /// 
 /// # Returns
 /// `true` if path is a directory
 /// `false` if path is not a directory or is a symlink
-#[allow(dead_code)]
-fn check_is_dir(path: &Path) -> bool {
-    if path.is_dir() && !path.is_symlink() {
-        // check if file a regular file or directory
-        return true;
-    } else {
-        return false;
-    }
+#[inline]
+fn is_dir(path: &Path) -> bool {
+    return path.is_dir() && !path.is_symlink();
+}
+
+/// Checks if the path is a regular file
+/// It will reject symlinks and special files
+/// 
+/// # Arguments
+/// Path of the file to check
+/// 
+/// # Returns
+/// `true` if path is a regular file
+/// `false` if path is not a regular file or is a symlink
+#[inline]
+fn is_file(path: &Path) -> bool {
+    return path.is_file() && !path.is_symlink();
 }
 
 /// Returns the real path of a file
@@ -84,10 +92,10 @@ fn check_is_dir(path: &Path) -> bool {
 /// This involves modifyin the directory path and adding or removing the .crypt extension (for files)
 /// 
 /// # Arguments
-/// `&Path` - Path of the fuse file
+/// Path of the fuse file
 /// 
 /// # Returns
-/// `PathBuf` - Path of the source file
+/// Path of the source file
 /// 
 /// # Errors
 /// `libc::ENOENT` - If the source file does not exist
@@ -102,28 +110,32 @@ fn get_source_path(cryptfs: &CryptFS, path: &Path) -> Result<PathBuf, libc::c_in
     let source_path = cryptfs.get_mapped_path(path);
     let source_path_alt = _toggle_extension(&source_path);
 
-    // which path exists
-    if source_path.exists() {
-        match is_path_allowed(&source_path) {
-            true => return Ok(source_path),
-            false => {
-                debug!("get_source_path() path: {} is not allowed", source_path.display());
-                return Err(libc::ENOENT);
-            }
-        };
-    }
 
+    // This should be the most common case
+    // The exception is for directories, which will be checked below
     if source_path_alt.exists() {
-        match is_path_allowed(&source_path_alt) {
+        match is_file(&source_path_alt) {
             true => return Ok(source_path_alt),
             false => {
-                debug!("get_source_path() path: {} is not allowed", source_path.display());
+                error!("Path: {} is not allowed. Reasons for this: Path points to a simlink; Directory name has a .crypt extension.", source_path.display());
                 return Err(libc::ENOENT);
             }
         };
     }
 
-    debug!("get_source_path() failed to find source path");
+    // A possible security issue is that a caller could get around security by using the .crypt extension
+    // Therefore we verify that the file is a directory, and not a regular file
+    if source_path.exists() {
+        match is_dir(&source_path) {
+            true => return Ok(source_path),
+            false => {
+                error!("Path: {} is not allowed. Reasons for this: Path points to a simlink; Source file has same extension as requested path", source_path.display());
+                return Err(libc::ENOENT);
+            }
+        };
+    }
+
+    error!("Failed to find source path for: {}", path.display());
     return Err(libc::ENOENT);
 }
 
@@ -148,15 +160,28 @@ fn get_crypt_mode(path: &Path) -> CryptMode {
 /// Logs the error message to the console
 /// 
 /// # Arguments
-/// `CryptfsError` - Error message to log
+/// `CryptFSError` - Error message to log
 /// `Option<&Path>` - Path of the file that caused the error
 /// 
-fn log_error(err: CryptfsError, path: Option<&Path>) {
+fn log_error(err: CryptFSError, path: Option<&Path>) {
     if let Some(path) = path {
-        error!("CryptfsError: {} for file: {}", err, path.display());
+        error!("CryptFSError for file: {}\nerror: {}", err, path.display());
     } else {
-        error!("CryptfsError: {}", err);
+        error!("CryptFSError: {}", err);
     }
+
+    match err {
+        CryptFSError::InternalError(err) => {
+            let stack_trace = err.backtrace();
+            if std::backtrace::Backtrace::status(stack_trace) == std::backtrace::BacktraceStatus::Disabled {
+                error!("--------------------------------------------------");
+                error!("  To view stack trace, run with RUST_BACKTRACE=1  ");
+                error!("--------------------------------------------------");
+            }
+        }
+        _ => (),
+    }
+
 }
 
 

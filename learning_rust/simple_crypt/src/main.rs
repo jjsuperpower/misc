@@ -33,7 +33,7 @@ fn main() -> std::io::Result<()> {
     let src_path = "src_dir";
     let mnt_path = "mnt_dir";
     let key = "012345689abcdefg";
-    let crypt_fs = CryptFS::new(String::from(key), String::from(src_path));
+    let crypt_fs = CryptFS::new(String::from(key), String::from(src_path), None);
 
     // print!("{}", crypt_fs.get_real_path(Path::new("/test.txt")).display());
     fuse_mt::mount(fuse_mt::FuseMT::new(crypt_fs, 1), &mnt_path, &[])?;
