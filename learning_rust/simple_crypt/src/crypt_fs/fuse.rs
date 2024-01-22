@@ -7,11 +7,8 @@ use std::time::{Duration, SystemTime};
 use fuse_mt::*;
 use libc;
 
-use anyhow;
-
 #[allow(unused_imports)]
 use log::{debug, error, info};
-use openssl::stack;
 
 use super::{CryptFS, CryptMode, CryptFSError};
 
@@ -117,7 +114,7 @@ fn get_source_path(cryptfs: &CryptFS, path: &Path) -> Result<PathBuf, libc::c_in
         match is_file(&source_path_alt) {
             true => return Ok(source_path_alt),
             false => {
-                error!("Path: {} is not allowed. Reasons for this: Path points to a simlink; Directory name has a .crypt extension.", source_path.display());
+                cryptfs.log_error(CryptFSError::IrregularFile, Some(path));
                 return Err(libc::ENOENT);
             }
         };
@@ -129,13 +126,13 @@ fn get_source_path(cryptfs: &CryptFS, path: &Path) -> Result<PathBuf, libc::c_in
         match is_dir(&source_path) {
             true => return Ok(source_path),
             false => {
-                error!("Path: {} is not allowed. Reasons for this: Path points to a simlink; Source file has same extension as requested path", source_path.display());
+                cryptfs.log_error(CryptFSError::IrregularFile, Some(path));
                 return Err(libc::ENOENT);
             }
         };
     }
 
-    error!("Failed to find source path for: {}", path.display());
+    cryptfs.log_error(CryptFSError::InvalidPath, Some(path));
     return Err(libc::ENOENT);
 }
 
@@ -155,37 +152,6 @@ fn get_crypt_mode(path: &Path) -> CryptMode {
         return CryptMode::Encrypt;
     }
 }
-
-
-/// Logs the error message to the console
-/// 
-/// # Arguments
-/// `CryptFSError` - Error message to log
-/// `Option<&Path>` - Path of the file that caused the error
-/// 
-fn log_error(err: CryptFSError, path: Option<&Path>) {
-    if let Some(path) = path {
-        error!("CryptFSError for file: {}\nerror: {}", err, path.display());
-    } else {
-        error!("CryptFSError: {}", err);
-    }
-
-    match err {
-        CryptFSError::InternalError(err) => {
-            let stack_trace = err.backtrace();
-            if std::backtrace::Backtrace::status(stack_trace) == std::backtrace::BacktraceStatus::Disabled {
-                error!("--------------------------------------------------");
-                error!("  To view stack trace, run with RUST_BACKTRACE=1  ");
-                error!("--------------------------------------------------");
-            }
-        }
-        _ => (),
-    }
-
-}
-
-
-
 
 impl FilesystemMT for CryptFS {
     fn init(&self, _req: RequestInfo) -> ResultEmpty {
@@ -219,7 +185,7 @@ impl FilesystemMT for CryptFS {
         let size = match self.get_crypt_read_size(&file, mode) {
             Ok(size) => size,
             Err(e) => {
-                log_error(e, Some(&_path));
+                self.log_error(e, Some(&_path));
                 return Err(libc::EIO);
             }
         };
@@ -368,7 +334,7 @@ impl FilesystemMT for CryptFS {
         let crypt_file = match self.crypt_translate(&file, mode) {
             Ok(crypt_file) => crypt_file,
             Err(e) => {
-                log_error(e, Some(&_path));
+                self.log_error(e, Some(&_path));
                 return callback(Err(libc::EIO)) 
             }
         };
