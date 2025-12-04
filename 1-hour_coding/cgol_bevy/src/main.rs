@@ -1,10 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
+use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
 use bevy::prelude::*;
+use bevy::window::{Window, WindowPlugin};
 
-const CELL_SIZE: f32 = 10.0;
-const CELL_INFILL_SIZE: f32 = CELL_SIZE - 4.0;
+const CELL_SIZE: f32 = 2.0;
+const CELL_INFILL_SIZE: f32 = CELL_SIZE - 1.0;
 
 const CELL_DEAD_SPRITE: LazyLock<Sprite> = LazyLock::new(|| Sprite {
     color: Color::linear_rgba(0.05, 0.05, 0.05, 1.0),
@@ -31,6 +33,15 @@ struct CellAlive;
 #[derive(Component)]
 struct EdgeCell; // Cells that are dead but adjacent to alive cells
 
+#[derive(Resource)]
+struct PruneTimer(Timer);
+
+impl Default for PruneTimer {
+    fn default() -> Self {
+        Self(Timer::from_seconds(1.0, TimerMode::Repeating))
+    }
+}
+
 #[derive(Resource, Default)]
 struct CellLocs {
     loc_to_entity: HashMap<(i32, i32), Entity>,
@@ -47,9 +58,9 @@ impl CellLocs {
         self.loc_to_entity.insert(*cell, entity);
     }
 
-    // fn remove(&mut self, pos: &(i32, i32)) {
-    //     self.loc_to_entity.remove(pos);
-    // }
+    fn remove(&mut self, pos: &(i32, i32)) {
+        self.loc_to_entity.remove(pos);
+    }
 
     fn get_neighbors(&self, pos: &(i32, i32)) -> (Vec<Entity>, Vec<(i32, i32)>) {
         // trace!("Getting neighbors for {:?}", pos);
@@ -77,6 +88,16 @@ fn add_cell_to_locs(add: On<Add, Cell>, query: Query<&Cell>, mut cell_locs: ResM
     cell_locs.add(&(cell.x, cell.y), add.entity);
 }
 
+fn remove_cell_from_locs(
+    remove: On<Remove, Cell>,
+    query: Query<&Cell>,
+    mut cell_locs: ResMut<CellLocs>,
+) {
+    if let Ok(cell) = query.get(remove.entity) {
+        cell_locs.remove(&(cell.x, cell.y));
+    }
+}
+
 fn spawn_cell(commands: &mut Commands, pos: (i32, i32), is_edge_cell: bool) -> Entity {
     debug!("Spawning cell at {:?}", pos);
     let mut entity = commands.spawn((
@@ -100,6 +121,7 @@ fn update_cell_sprites(
     // Only update when CellAlive component is added or removed
     born_query: Query<Entity, (With<Cell>, Added<CellAlive>)>,
     mut died: RemovedComponents<CellAlive>,
+    entities: Query<(), With<Cell>>, // Check if entity still exists
 ) {
     debug!("update_cell_sprites");
     for entity in born_query.iter() {
@@ -107,7 +129,10 @@ fn update_cell_sprites(
     }
 
     for entity in died.read() {
-        commands.entity(entity).insert(CELL_DEAD_SPRITE.clone());
+        // Only update sprite if the entity still exists
+        if entities.contains(entity) {
+            commands.entity(entity).insert(CELL_DEAD_SPRITE.clone());
+        }
     }
 }
 
@@ -116,7 +141,7 @@ fn update_edge_cells(
     mut commands: Commands,
     cell_locs: ResMut<CellLocs>,
     alive_query: Query<&Cell, With<CellAlive>>,
-    all_query: Query<Entity, With<Cell>>,
+    all_query: Query<Entity, (With<Cell>, With<EdgeCell>)>,
 ) {
     debug!("update_edge_cells");
     // remove EdgeCell component from all edge cells
@@ -227,17 +252,51 @@ fn spawn_cells(mut commands: Commands) {
     spawn_cell(&mut commands, (6, 0), false);
 }
 
+fn prune_dead_cells(
+    time: Res<Time>,
+    mut timer: ResMut<PruneTimer>,
+    mut commands: Commands,
+    dead_cells: Query<(Entity, &Cell), (Without<CellAlive>, Without<EdgeCell>)>,
+) {
+    timer.0.tick(time.delta());
+
+    if timer.0.just_finished() {
+        let mut pruned_count = 0;
+
+        for (entity, _cell) in dead_cells.iter() {
+            // Despawn the entity - the observer will handle CellLocs cleanup
+            commands.entity(entity).despawn();
+            pruned_count += 1;
+        }
+
+        if pruned_count > 0 {
+            info!("Pruned {} dead cells", pruned_count);
+        }
+    }
+}
+
 fn main() {
     info!("Starting Game of Life with Bevy");
     App::new()
-        .add_plugins(DefaultPlugins)
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                present_mode: bevy::window::PresentMode::Immediate, // Disables VSync
+                ..default()
+            }),
+            ..default()
+        }))
+        .add_plugins(FrameTimeDiagnosticsPlugin::default())
+        .add_plugins(LogDiagnosticsPlugin::default())
         .init_resource::<CellLocs>()
+        .init_resource::<PruneTimer>()
         .add_systems(Startup, setup_system)
         .add_systems(Startup, spawn_cells)
         .add_systems(
             Update,
-            (update_cell_sprites, update_edge_cells, game_rules).chain(),
+            ((update_edge_cells, game_rules).chain(), update_cell_sprites).before(prune_dead_cells),
         )
+        .add_systems(Update, prune_dead_cells)
         .add_observer(add_cell_to_locs)
+        .add_observer(remove_cell_from_locs)
         .run();
 }
