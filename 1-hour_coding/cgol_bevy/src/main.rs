@@ -1,3 +1,5 @@
+use bevy::platform::cell;
+use dashmap::{DashMap, DashSet};
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
@@ -44,11 +46,11 @@ impl Default for PruneTimer {
 
 #[derive(Resource, Default)]
 struct CellLocs {
-    loc_to_entity: HashMap<(i32, i32), Entity>,
+    loc_to_entity: DashMap<(i32, i32), Entity>,
 }
 
 impl CellLocs {
-    fn add(&mut self, cell: &(i32, i32), entity: Entity) {
+    fn add(&self, cell: &(i32, i32), entity: Entity) {
         // panic if cell already exists
         if self.loc_to_entity.contains_key(cell) {
             warn!("Cell at {:?} already exists!", cell);
@@ -58,7 +60,7 @@ impl CellLocs {
         self.loc_to_entity.insert(*cell, entity);
     }
 
-    fn remove(&mut self, pos: &(i32, i32)) {
+    fn remove(&self, pos: &(i32, i32)) {
         self.loc_to_entity.remove(pos);
     }
 
@@ -71,8 +73,8 @@ impl CellLocs {
                 if dx == 0 && dy == 0 {
                     continue;
                 }
-                if let Some(&entity) = self.loc_to_entity.get(&(pos.0 + dx, pos.1 + dy)) {
-                    neighbors.push(entity);
+                if let Some(entity) = self.loc_to_entity.get(&(pos.0 + dx, pos.1 + dy)) {
+                    neighbors.push(*entity);
                 } else {
                     vacancies.push((pos.0 + dx, pos.1 + dy));
                 }
@@ -82,17 +84,13 @@ impl CellLocs {
     }
 }
 
-fn add_cell_to_locs(add: On<Add, Cell>, query: Query<&Cell>, mut cell_locs: ResMut<CellLocs>) {
+fn add_cell_to_locs(add: On<Add, Cell>, query: Query<&Cell>, cell_locs: Res<CellLocs>) {
     debug!("add_cell_to_locs");
     let cell = query.get(add.entity).unwrap();
     cell_locs.add(&(cell.x, cell.y), add.entity);
 }
 
-fn remove_cell_from_locs(
-    remove: On<Remove, Cell>,
-    query: Query<&Cell>,
-    mut cell_locs: ResMut<CellLocs>,
-) {
+fn remove_cell_from_locs(remove: On<Remove, Cell>, query: Query<&Cell>, cell_locs: Res<CellLocs>) {
     if let Ok(cell) = query.get(remove.entity) {
         cell_locs.remove(&(cell.x, cell.y));
     }
@@ -139,40 +137,49 @@ fn update_cell_sprites(
 /// Update all dead cells that are adjacent to alive cells
 fn update_edge_cells(
     mut commands: Commands,
-    cell_locs: ResMut<CellLocs>,
+    cell_locs: Res<CellLocs>,
     alive_query: Query<&Cell, With<CellAlive>>,
-    all_query: Query<Entity, (With<Cell>, With<EdgeCell>)>,
+    edge_query: Query<Entity, (With<Cell>, With<EdgeCell>)>,
 ) {
     debug!("update_edge_cells");
-    // remove EdgeCell component from all edge cells
-    for entity in all_query.iter() {
-        commands.entity(entity).remove::<EdgeCell>();
-    }
 
-    let mut spawned_cell_locs = HashSet::new();
+    // Remove EdgeCell component from all edge cells
+    edge_query.iter().for_each(|entity| {
+        commands.entity(entity).remove::<EdgeCell>();
+    });
+
+    let cells_to_spawn = DashSet::new();
+    let new_edge_cells = DashSet::new();
 
     // add EdgeCell component to all dead cells adjacent to alive cells
-    for cell in alive_query.iter() {
+    alive_query.iter().for_each(|cell| {
         let (neighbors, vacancies) = cell_locs.get_neighbors(&(cell.x, cell.y));
         // if no cell exists, create it
         for vacancy in vacancies {
-            if !spawned_cell_locs.contains(&vacancy) {
-                spawn_cell(&mut commands, vacancy, true);
-                spawned_cell_locs.insert(vacancy);
-            }
+            // check if we've already spawned a cell at this location
+            // the query will not update until the next frame, so we need to track spawned cells ourselves
+            cells_to_spawn.insert(vacancy);
         }
         // mark existing dead neighbors as edge cells
         for neighbor in neighbors {
             if !alive_query.get(neighbor).is_ok() {
-                commands.entity(neighbor).insert(EdgeCell);
+                new_edge_cells.insert(neighbor);
             }
         }
+    });
+
+    for vacancy in cells_to_spawn.iter() {
+        spawn_cell(&mut commands, *vacancy, true);
+    }
+
+    for entity in new_edge_cells.iter() {
+        commands.entity(*entity).insert(EdgeCell);
     }
 }
 
 fn game_rules(
     mut commands: Commands,
-    cell_locs: ResMut<CellLocs>,
+    cell_locs: Res<CellLocs>,
     alive_query: Query<(Entity, &Cell), With<CellAlive>>,
     edge_query: Query<(Entity, &Cell), (Without<CellAlive>, With<EdgeCell>)>,
 ) {
@@ -189,32 +196,24 @@ fn game_rules(
 
     // Get a list of cells to spawn, but don't spawn them yet
     // cells with exactly 3 alive neighbors become alive
-    let cells_to_spawn: Vec<_> = edge_query
-        .iter()
-        .filter_map(|(entity, cell)| {
-            let alive_neighbors = get_num_alive_neighbors(cell);
-            if alive_neighbors == 3 {
-                trace!("Found cell {} @ {:?} to birth", entity, (cell.x, cell.y));
-                Some(entity)
-            } else {
-                None
-            }
-        })
-        .collect();
+    let cells_to_spawn: DashSet<Entity> = DashSet::new();
+    edge_query.iter().for_each(|(entity, cell)| {
+        let alive_neighbors = get_num_alive_neighbors(cell);
+        if alive_neighbors == 3 {
+            trace!("Found cell {} @ {:?} to birth", entity, (cell.x, cell.y));
+            cells_to_spawn.insert(entity);
+        }
+    });
 
     // kill cells with fewer than 2 or more than 3 alive neighbors
-    let cells_to_kill: Vec<_> = alive_query
-        .iter()
-        .filter_map(|(entity, cell)| {
-            let alive_neighbors = get_num_alive_neighbors(cell);
-            if (alive_neighbors < 2) || (alive_neighbors > 3) {
-                trace!("Found cell {} @ {:?} to kill", entity, (cell.x, cell.y));
-                Some(entity)
-            } else {
-                None
-            }
-        })
-        .collect();
+    let cells_to_kill: DashSet<Entity> = DashSet::new();
+    alive_query.iter().for_each(|(entity, cell)| {
+        let alive_neighbors = get_num_alive_neighbors(cell);
+        if (alive_neighbors < 2) || (alive_neighbors > 3) {
+            trace!("Found cell {} @ {:?} to kill", entity, (cell.x, cell.y));
+            cells_to_kill.insert(entity);
+        }
+    });
 
     debug!("Birthing {} cells", cells_to_spawn.len());
     debug!("Killing {} cells", cells_to_kill.len());
