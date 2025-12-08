@@ -1,0 +1,3 @@
+[hardware-check]
+wifi_ssid = "ESPTestNetwork"
+wifi_psk = "hunter2"
