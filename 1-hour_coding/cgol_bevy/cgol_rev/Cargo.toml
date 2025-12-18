@@ -1,0 +1,10 @@
+[package]
+authors = ["Jonathan Sanderson <jjs29356@gmail.com>"]
+edition = "2021"
+name = "cgol_rev"
+description = "Compute previous states in Conway's Game of Life"
+version = "0.1.0"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
