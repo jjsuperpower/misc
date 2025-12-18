@@ -1,18 +1,18 @@
-[package]
-authors = ["Jonathan Sanderson <jjs29356@gmail.com>"]
-edition = "2021"
-# If you change the name here, you must also do it in flake.nix (and run `cargo generate-lockfile` afterwards)
-name = "cgol_bevy"
-description = "A simple Rust project using Nix"
-version = "0.1.0"
+[workspace]
+resolver = "2"
+members = ["cgol_bevy"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
+[workspace.dependencies]
 bevy = { version = "0.17.3", features = ["dynamic_linking"] }
 clap = { version = "4.3.14", features = ["derive"] }
 dashmap = { version = "6.1.0", features = ["rayon"] }
 
+# Development tools managed by cargo-run-bin
+cargo-autoinherit = "0.1.6"
+cargo-run-bin = "1.7.2"
+
+[workspace.metadata.bin]
+cargo-autoinherit = { version = "0.1.6" }
 
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]

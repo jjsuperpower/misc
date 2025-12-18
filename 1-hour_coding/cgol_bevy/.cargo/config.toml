@@ -9,3 +9,6 @@ rustflags = [
     # "-C",
     # "debuginfo=2",
 ]
+
+[alias]
+autoinherit = "bin cargo-autoinherit"
