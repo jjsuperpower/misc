@@ -8,3 +8,5 @@ version = "0.1.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+slab = "0.4.11"
+varisat = "0.2.2"
