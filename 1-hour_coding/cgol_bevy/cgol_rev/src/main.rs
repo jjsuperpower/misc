@@ -23,7 +23,7 @@ pub fn main() {
         for y in -1..=1 {
             let neighbor_cell = Cell { x, y, timestep: 0 };
             cells.push(neighbor_cell.clone());
-            if x == 0 && y == 0 {
+            if (x == 0 || x == 1 || x == -1) && y == 0 {
                 cell_states.insert_if_empty(neighbor_cell, CellState::Alive);
             } else {
                 cell_states.insert_if_empty(neighbor_cell, CellState::Dead);
@@ -32,7 +32,10 @@ pub fn main() {
     }
 
     let mut sat_inputs = SatInputs::new();
-    reverse_gol(&mut sat_inputs, &cells, &mut cell_states, 0);
+    // reverse_gol(&mut sat_inputs, &cells, &mut cell_states, 0);
+    for step in (-4..=0).rev() {
+        cells = reverse_gol(&mut sat_inputs, &cells, &mut cell_states, step);
+    }
 
     let mut solver = Solver::new();
     // solver.write_proof(std::io::stdout(), varisat::ProofFormat::Varisat);

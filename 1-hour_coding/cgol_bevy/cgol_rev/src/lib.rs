@@ -44,7 +44,7 @@ pub fn reverse_gol(
     alive_cells: &[Cell],
     cell_states: &mut CellStates,
     current_timestep: i32,
-) -> HashSet<Cell> {
+) -> Vec<Cell> {
     let loc_prev_cells: HashSet<(i32, i32)> = alive_cells
         .iter()
         .inspect(|c| {
@@ -52,6 +52,7 @@ pub fn reverse_gol(
         })
         .map(|cell| (cell.x, cell.y))
         .collect();
+
     let mut prev_timestep_cells: HashSet<Cell> = HashSet::new();
 
     for cell in alive_cells.iter() {
@@ -97,5 +98,5 @@ pub fn reverse_gol(
         }
     }
 
-    prev_timestep_cells
+    prev_timestep_cells.into_iter().collect()
 }

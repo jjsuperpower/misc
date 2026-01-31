@@ -43,6 +43,10 @@ impl CellStates {
         self.states.entry(cell.as_ref().clone()).or_insert(state)
     }
 
+    pub fn insert<T: AsRef<Cell>>(&mut self, cell: T, state: CellState) {
+        self.states.insert(cell.as_ref().clone(), state);
+    }
+
     pub fn is_alive(&self, cell: &Cell) -> bool {
         matches!(self.states.get(cell), Some(CellState::Alive))
     }
