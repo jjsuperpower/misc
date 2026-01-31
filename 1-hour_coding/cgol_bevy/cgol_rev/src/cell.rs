@@ -12,6 +12,12 @@ pub struct CellStates {
     pub states: HashMap<Cell, bool>, // true = alive, false = dead
 }
 
+impl AsRef<Cell> for Cell {
+    fn as_ref(&self) -> &Cell {
+        self
+    }
+}
+
 impl CellStates {
     pub fn new() -> Self {
         Self {

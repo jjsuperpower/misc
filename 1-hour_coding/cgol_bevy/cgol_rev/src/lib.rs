@@ -11,7 +11,7 @@ fn constr_prev_gol<'a>(
     sat_inputs: &mut SatInputs,
     curr_cell: &'a Cell,
     past_cell: &'a Cell,
-    past_neighbors: [&'a Cell; 8],
+    past_neighbors: &'a [Cell; 8],
 ) {
     // enforce rules for each cell in the previous timestep
     //
@@ -42,72 +42,47 @@ fn constr_prev_gol<'a>(
 pub fn reverse_gol(
     sat_inputs: &mut SatInputs,
     alive_cells: &[Cell],
-    cell_states: &mut CellStates,
     current_timestep: i32,
-) -> () {
-    let mut curr_timestep_cells = HashMap::new();
+) -> HashSet<Cell> {
+    let mut prev_timestep_cells: HashSet<Cell> = HashSet::new();
 
-    for cell in alive_cells {
-        for dx in -1..=1 {
-            for dy in -1..=1 {
-                let cell = Cell {
-                    x: cell.x + dx,
-                    y: cell.y + dy,
-                    timestep: current_timestep,
-                };
-                cell_states.add_default(cell.clone());
-                curr_timestep_cells.insert((cell.x, cell.y), cell);
-            }
-        }
-    }
-
-    let prev_timestep_cells: HashSet<Cell> = cell_states
-        .states
-        .keys()
-        .filter(|c| c.timestep == current_timestep - 1)
-        .cloned()
-        .collect();
-
-    for ((_x, _y), cell) in curr_timestep_cells.iter() {
-        let mut neighbor_prev_cells = vec![];
-        for dx in -1..=1 {
-            for dy in -1..=1 {
-                if dx == 0 && dy == 0 {
-                    continue;
-                }
-                let neighbor_cell = Cell {
-                    x: cell.x + dx,
-                    y: cell.y + dy,
-                    timestep: current_timestep - 1,
-                };
-                if prev_timestep_cells.contains(&neighbor_cell) {
-                    neighbor_prev_cells.push(neighbor_cell);
-                } else {
-                    // cell_states.add_dead_cell(neighbor_cell.clone());
-                    neighbor_prev_cells.push(neighbor_cell);
-                }
-            }
-        }
+    for cell in alive_cells.iter() {
+        let neighbor_prev_cells: [Cell; 8] = [
+            (-1, -1),
+            (-1, 0),
+            (-1, 1),
+            (0, -1),
+            (0, 1),
+            (1, -1),
+            (1, 0),
+            (1, 1),
+        ]
+        .iter()
+        .map(|(dx, dy)| {
+            let neighbor_cell = Cell {
+                x: cell.x + dx,
+                y: cell.y + dy,
+                timestep: current_timestep - 1,
+            };
+            neighbor_cell
+        })
+        .collect::<Vec<Cell>>()
+        .try_into()
+        .unwrap();
 
         let past_cell = Cell {
             x: cell.x,
             y: cell.y,
             timestep: current_timestep - 1,
         };
-        constr_prev_gol(
-            sat_inputs,
-            cell,
-            &past_cell,
-            [
-                &neighbor_prev_cells[0],
-                &neighbor_prev_cells[1],
-                &neighbor_prev_cells[2],
-                &neighbor_prev_cells[3],
-                &neighbor_prev_cells[4],
-                &neighbor_prev_cells[5],
-                &neighbor_prev_cells[6],
-                &neighbor_prev_cells[7],
-            ],
-        );
+
+        constr_prev_gol(sat_inputs, cell, &past_cell, &neighbor_prev_cells);
+
+        prev_timestep_cells.insert(past_cell);
+        for neighbor in neighbor_prev_cells.iter() {
+            prev_timestep_cells.insert(neighbor.clone());
+        }
     }
+
+    prev_timestep_cells
 }

@@ -385,7 +385,7 @@ impl SatInputs {
     ///
     /// Returns:
     /// - sorted array of 8 literals, from least to greatest
-    fn sat_sort_8<'a>(&self, cells: [&'a Cell; 8]) -> [Formula<'a>; 8] {
+    fn sat_sort_8<'a, T: AsRef<Cell>>(&self, cells: &'a [T; 8]) -> [Formula<'a>; 8] {
         // Batcher's odd-even mergesort network for 8 inputs
         // [(0,2),(1,3),(4,6),(5,7)]
         // [(0,4),(1,5),(2,6),(3,7)]
@@ -395,10 +395,10 @@ impl SatInputs {
         // [(1,2),(3,4),(5,6)]
 
         // Stage 1
-        let (x1, x3) = self.sat_sort_2(cells[1].into(), cells[3].into());
-        let (x4, x6) = self.sat_sort_2(cells[4].into(), cells[6].into());
-        let (x0, x2) = self.sat_sort_2(cells[0].into(), cells[2].into());
-        let (x5, x7) = self.sat_sort_2(cells[5].into(), cells[7].into());
+        let (x1, x3) = self.sat_sort_2(cells[1].as_ref().into(), cells[3].as_ref().into());
+        let (x4, x6) = self.sat_sort_2(cells[4].as_ref().into(), cells[6].as_ref().into());
+        let (x0, x2) = self.sat_sort_2(cells[0].as_ref().into(), cells[2].as_ref().into());
+        let (x5, x7) = self.sat_sort_2(cells[5].as_ref().into(), cells[7].as_ref().into());
 
         // Stage 2
         let (x3, x7) = self.sat_sort_2(x3, x7);
@@ -437,7 +437,10 @@ impl SatInputs {
     ///
     /// Returns:
     /// - (Formula for exactly two alive neighbors, Formula for exactly three alive neighbors)
-    pub fn cell_constr_neighbors<'a>(&self, cells: [&'a Cell; 8]) -> (Formula<'a>, Formula<'a>) {
+    pub fn cell_constr_neighbors<'a, T: AsRef<Cell>>(
+        &self,
+        cells: &'a [T; 8],
+    ) -> (Formula<'a>, Formula<'a>) {
         // We only need to check that the literals at index 6 and 7 are true and 5 is false
         // this is because the sorting network will sort the literals such that the true literals are at the end
 

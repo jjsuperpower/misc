@@ -21,7 +21,7 @@ pub fn main() {
         for y in -1..=1 {
             let neighbor_cell = Cell { x, y, timestep: 0 };
             cells.push(neighbor_cell.clone());
-            if (x == 0 || x == 1 || x == -1) && y == 0 {
+            if x == 0 && y == 0 {
                 cell_states.add_living_cell(neighbor_cell);
             } else {
                 cell_states.add_dead_cell(neighbor_cell);
@@ -30,10 +30,14 @@ pub fn main() {
     }
 
     let mut sat_inputs = SatInputs::new();
-    reverse_gol(&mut sat_inputs, &cells, &mut cell_states, 0);
+    reverse_gol(&mut sat_inputs, &cells, 0);
 
     let mut solver = Solver::new();
     // solver.write_proof(std::io::stdout(), varisat::ProofFormat::Varisat);
+
+    for (cell, is_alive) in cell_states.states.iter() {
+        sat_inputs.set_cell_value(cell, *is_alive);
+    }
 
     solver.add_formula(&sat_inputs.get_cnf_formulas());
 
@@ -45,8 +49,8 @@ pub fn main() {
         if lit.is_positive() {
             if let Some(cell) = sat_inputs.get_cell(&lit) {
                 println!(
-                    "Cell at ({}, {}) is alive in the previous state.",
-                    cell.x, cell.y
+                    "TimeStep: {} Cell({}, {}) is alive",
+                    cell.timestep, cell.x, cell.y
                 );
             }
         }
