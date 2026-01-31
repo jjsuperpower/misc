@@ -1,4 +1,6 @@
-use cgol_rev::cell::{Cell, CellStates};
+use std::os::linux::raw::stat;
+
+use cgol_rev::cell::{Cell, CellState, CellStates};
 use cgol_rev::reverse_gol;
 use cgol_rev::sat::SatInputs;
 use varisat::Solver;
@@ -22,21 +24,29 @@ pub fn main() {
             let neighbor_cell = Cell { x, y, timestep: 0 };
             cells.push(neighbor_cell.clone());
             if x == 0 && y == 0 {
-                cell_states.add_living_cell(neighbor_cell);
+                cell_states.insert_if_empty(neighbor_cell, CellState::Alive);
             } else {
-                cell_states.add_dead_cell(neighbor_cell);
+                cell_states.insert_if_empty(neighbor_cell, CellState::Dead);
             }
         }
     }
 
     let mut sat_inputs = SatInputs::new();
-    reverse_gol(&mut sat_inputs, &cells, 0);
+    reverse_gol(&mut sat_inputs, &cells, &mut cell_states, 0);
 
     let mut solver = Solver::new();
     // solver.write_proof(std::io::stdout(), varisat::ProofFormat::Varisat);
 
-    for (cell, is_alive) in cell_states.states.iter() {
-        sat_inputs.set_cell_value(cell, *is_alive);
+    for (cell, state) in cell_states.states.iter() {
+        match state {
+            CellState::Alive => {
+                sat_inputs.set_cell_value(cell, true);
+            }
+            CellState::Dead => {
+                sat_inputs.set_cell_value(cell, false);
+            }
+            CellState::Tbd => {}
+        }
     }
 
     solver.add_formula(&sat_inputs.get_cnf_formulas());

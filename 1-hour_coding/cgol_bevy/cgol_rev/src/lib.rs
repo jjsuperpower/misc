@@ -5,7 +5,7 @@ use cell::{Cell, CellStates};
 pub mod sat;
 use sat::SatInputs;
 
-use crate::sat::Formula;
+use crate::{cell::CellState, sat::Formula};
 
 fn constr_prev_gol<'a>(
     sat_inputs: &mut SatInputs,
@@ -42,8 +42,16 @@ fn constr_prev_gol<'a>(
 pub fn reverse_gol(
     sat_inputs: &mut SatInputs,
     alive_cells: &[Cell],
+    cell_states: &mut CellStates,
     current_timestep: i32,
 ) -> HashSet<Cell> {
+    let loc_prev_cells: HashSet<(i32, i32)> = alive_cells
+        .iter()
+        .inspect(|c| {
+            cell_states.insert_if_empty(c, CellState::Alive);
+        })
+        .map(|cell| (cell.x, cell.y))
+        .collect();
     let mut prev_timestep_cells: HashSet<Cell> = HashSet::new();
 
     for cell in alive_cells.iter() {
@@ -64,6 +72,10 @@ pub fn reverse_gol(
                 y: cell.y + dy,
                 timestep: current_timestep - 1,
             };
+
+            if !loc_prev_cells.contains(&(neighbor_cell.x, neighbor_cell.y)) {
+                cell_states.insert_if_empty(neighbor_cell.clone(), CellState::Dead);
+            }
             neighbor_cell
         })
         .collect::<Vec<Cell>>()
@@ -81,6 +93,7 @@ pub fn reverse_gol(
         prev_timestep_cells.insert(past_cell);
         for neighbor in neighbor_prev_cells.iter() {
             prev_timestep_cells.insert(neighbor.clone());
+            cell_states.insert_if_empty(neighbor.clone(), CellState::Tbd);
         }
     }
 

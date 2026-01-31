@@ -8,8 +8,14 @@ pub struct Cell {
     pub timestep: i32,
 }
 
+pub enum CellState {
+    Alive,
+    Dead,
+    Tbd,
+}
+
 pub struct CellStates {
-    pub states: HashMap<Cell, bool>, // true = alive, false = dead
+    pub states: HashMap<Cell, CellState>, // true = alive, false = dead
 }
 
 impl AsRef<Cell> for Cell {
@@ -25,21 +31,20 @@ impl CellStates {
         }
     }
 
-    pub fn add_living_cell(&mut self, cell: Cell) {
-        self.states.insert(cell, true);
+    pub fn get(&self, cell: &Cell) -> Option<&CellState> {
+        self.states.get(cell)
     }
 
-    pub fn add_dead_cell(&mut self, cell: Cell) {
-        self.states.insert(cell, false);
+    pub fn contains(&self, cell: &Cell) -> bool {
+        self.states.contains_key(cell)
     }
 
-    /// Adds a dead cell if it doesn't exist, returns whether the cell is alive
-    pub fn add_default(&mut self, cell: Cell) -> bool {
-        *self.states.entry(cell.clone()).or_insert(false)
+    pub fn insert_if_empty<T: AsRef<Cell>>(&mut self, cell: T, state: CellState) -> &CellState {
+        self.states.entry(cell.as_ref().clone()).or_insert(state)
     }
 
     pub fn is_alive(&self, cell: &Cell) -> bool {
-        *self.states.get(cell).unwrap_or(&false)
+        matches!(self.states.get(cell), Some(CellState::Alive))
     }
 }
 
